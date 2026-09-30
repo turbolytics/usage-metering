@@ -135,8 +135,9 @@ rollup. Three consequences for the design:
   counts within about 1%. Both are fine for analytics and wrong for an
   invoice.
 - **Hashed ids, not raw ids.** `md5_number(id)` is deterministic, so replays
-  agree, and fixed at 16 bytes. At 50,000 events a second over 180 seconds of
-  retention, the chance of any collision is about 10^-20. A 64-bit hash would
+  agree, and fixed at 16 bytes. At 50,000 events a second, 9 million ids are
+  held at once, and the chance of any collision is about 10^-25 per window
+  and 10^-21 over a month. A 64-bit hash would
   save 8 bytes a row and give about a 3% chance of one miscounted event a
   month at that rate, so it is not used.
 - **A stated dedupe horizon.** A duplicate is caught while its minute is
