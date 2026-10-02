@@ -257,6 +257,31 @@ usage-metering/
   README.md
 ```
 
+## Revisions (2026-10-02)
+
+`2026-10-02-metering-demo-design.md` designs the demo console and changes
+these decisions. Where the two disagree, that spec wins.
+
+- **Two count workers, not three:** `count` in `docker-compose.yml`, `count-2`
+  in the demo overlay. The core file runs one worker; the shared config keeps
+  `partition_owned: true`, so it scales out with no config change.
+- **`allowed_lateness_seconds: 120`, up from 60:** a crashed worker's
+  partitions move only after the ~45s session timeout, and lateness must exceed
+  the rebalance time (sql-flow #417). The dedupe horizon becomes window + grace
+  + lateness, 185 seconds.
+- **Two compose files:** `docker-compose.yml` is the production shape (`kafka`,
+  `postgres`, `minio`, `ingest`, `count`, `archive`, `rollups`, `serve`);
+  `docker-compose.demo.yml` adds `count-2` and `demo-console`.
+- **`sample-app` gains a control API and a sent ledger**, which the console
+  drives and reads.
+- **The SDK gains `onAck`**, called once per batch ingest acknowledged.
+- **`serve` gains a `minute_totals` dataset** for the console's per-minute
+  graph.
+- **The message:** the README and console lead with "your data flows through
+  Kafka; SQLFlow handles windowing, rollups, raw capture and the read path,
+  with ingest as an optional on-ramp", and state the volume below which a
+  Postgres table keyed by event id is simpler.
+
 ## Out of scope for v1
 
 - A Render Blueprint and production hardening.
