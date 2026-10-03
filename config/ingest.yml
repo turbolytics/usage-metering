@@ -1,0 +1,60 @@
+# Usage metering, step one: an HTTP endpoint that puts each metered event in
+# Kafka and answers only once it is there. count.yml and archive.yml read the
+# topic. Optional: an app that already produces to Kafka can skip it.
+commands:
+  # A `ts` with no offset reads as UTC, and epoch_ms renders in the session
+  # zone; pinned, so the clamp and the millisecond are the same on every host.
+  - name: pin the session timezone
+    sql: SET TimeZone='UTC';
+
+pipeline:
+  name: metering-ingest
+  # With ack after_flush a request waits for its batch to fill or for the
+  # interval, so the interval is the ceiling on a lone sender's wait:
+  # measured p50 1.00s, p99 1.04s at 1s.
+  batch_size: 500
+  flush_interval_seconds: 1
+
+  source:
+    type: webhook
+    webhook:
+      addr: "0.0.0.0:8001"
+      # Answer after the batch holding the body has flushed to Kafka and its
+      # position is committed: a 200 means the event is in the log, a failed
+      # flush answers 503 and the sender retries. The default, on_receive,
+      # answers as the body is queued, and a crash before the flush loses an
+      # event the sender was told it had delivered.
+      ack: after_flush
+
+  handler:
+    type: handlers.InferredMemBatch
+    # One request body is a batch of events; one event is one row per meter.
+    # An event with no id or customer is dropped: the count depends on both.
+    # A meter whose value is null or absent is dropped for that meter only.
+    # ts is clamped to at most 5s ahead of this clock, so one far-future
+    # timestamp cannot drag the watermark and close every open minute.
+    sql: |
+      WITH e AS (SELECT unnest(events) AS e FROM batch),
+      k AS (
+        SELECT e, to_json(e.quantities) AS qj,
+               unnest(json_keys(to_json(e.quantities))) AS meter
+        FROM e
+      )
+      SELECT e.id AS id, e.customer AS customer, meter,
+             CAST(json_extract(qj, '$.' || meter) AS BIGINT) AS quantity,
+             epoch_ms(least(CAST(e.ts AS TIMESTAMPTZ), now() + INTERVAL 5 SECOND)) AS ts_ms
+      FROM k
+      WHERE e.id IS NOT NULL AND e.customer IS NOT NULL
+        AND json_extract(qj, '$.' || meter) IS NOT NULL
+        AND json_extract(qj, '$.' || meter) != 'null'
+
+  sink:
+    type: kafka
+    kafka:
+      brokers: ["{{ SQLFLOW_KAFKA_BROKERS }}"]
+      topic: usage.events
+      # Key every record by the customer, so a retried event lands on the
+      # partition its original went to, where the count window sees both
+      # and counts the id once. Unkeyed, a retry and its original spread
+      # across partitions and each is counted.
+      key: customer

@@ -67,3 +67,34 @@ services:
     command: >
       curl -sf --aws-sigv4 aws:amz:us-east-1:s3 --user rustfsadmin:rustfsadmin
            -X PUT http://rustfs:9000/usage -o /dev/null
+
+  # Creates the topic every SQLFlow role reads or writes, then exits. Six
+  # partitions, so two count workers split it 3/3. Created up front, not on
+  # first write, so a consumer that starts before any event arrives still
+  # finds it.
+  kafka-init:
+    image: confluentinc/confluent-local:7.5.0
+    depends_on:
+      kafka: {condition: service_healthy}
+    entrypoint: ["kafka-topics"]
+    command: ["--bootstrap-server", "kafka:9092", "--create", "--if-not-exists",
+              "--topic", "usage.events", "--partitions", "6", "--replication-factor", "1"]
+
+  # Step one: an HTTP endpoint that writes each event to Kafka and answers
+  # 200 only once it is there. Optional, for an app that does not produce to
+  # Kafka itself.
+  ingest:
+    image: ${SQLFLOW_IMAGE}
+    command: ["run", "/config/ingest.yml", "--metrics", "prometheus"]
+    env_file: .env
+    volumes: ["./config:/config:ro"]
+    ports: ["${INGEST_HOST_PORT:-8001}:8001"]
+    depends_on:
+      kafka-init: {condition: service_completed_successfully}
+    healthcheck:
+      # The webhook's own /healthz: 200 while it admits deliveries. The image
+      # carries no curl or wget, so bash speaks HTTP over /dev/tcp.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8001 && printf 'GET /healthz HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q '\"status\":\"ok\"' <&3"]
+      interval: 3s
+      timeout: 3s
+      retries: 20

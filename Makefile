@@ -1,7 +1,9 @@
 # The stack: `make up` is the production shape, `make demo` adds the second
 # count worker and (in the console plan) the console.
 COMPOSE      := docker compose
-COMPOSE_DEMO := docker compose -f docker-compose.yml -f docker-compose.demo.yml
+# The demo overlay is added only once it exists, so down and logs work on
+# the production shape alone.
+COMPOSE_DEMO := docker compose -f docker-compose.yml $(if $(wildcard docker-compose.demo.yml),-f docker-compose.demo.yml)
 
 .PHONY: env up demo down logs validate sqlflow-image test load
 
